@@ -1,0 +1,21 @@
+{
+  "name": "pi-jobs",
+  "version": "1.0.0",
+  "description": "Auditable background job queue for the Pi coding agent",
+  "private": true,
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./extension/jobs.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1"
+  }
+}
