@@ -2,6 +2,8 @@
 
 [简体中文](./README.md) | English
 
+[![CI](https://github.com/baidd1011/pi-jobs/actions/workflows/ci.yml/badge.svg)](https://github.com/baidd1011/pi-jobs/actions/workflows/ci.yml)
+
 `pi-jobs` is a Windows-first, auditable background job queue for the Pi coding agent. Submit work from a Pi session, leave the terminal, and receive the result as an isolated local Git branch with durable status, cost, logs, and an append-only derived audit trail.
 
 The first release is deliberately sequential and local: it does not create or push PRs, run jobs in parallel, wake a sleeping computer, retry model calls automatically, or support non-Windows schedulers.
@@ -26,6 +28,39 @@ After installation, run inside Pi:
 
 Use `pi list` to see the Git package's actual installation path.
 
+Check the running version and whether the scheduled task still points to the current package:
+
+```text
+/job version
+```
+
+### Upgrade
+
+A Git tag is pinned and is not moved by a normal `pi update`. Install the new tag, then refresh the runner path stored in Task Scheduler:
+
+```powershell
+pi install git:github.com/baidd1011/pi-jobs@vX.Y.Z
+```
+
+```text
+/reload
+/job version
+/job setup
+/job doctor
+```
+
+### Uninstall
+
+Remove the scheduled task before removing the Git package. Data, logs, result branches, and retained worktrees are preserved:
+
+```text
+/job uninstall
+```
+
+```powershell
+pi remove git:github.com/baidd1011/pi-jobs
+```
+
 ## Execution model
 
 1. `/job add` freezes the current repository's committed `HEAD` and atomically writes a queued job. A dirty main worktree is allowed, but its uncommitted changes are never copied into the job.
@@ -49,6 +84,7 @@ The worker rescans an empty queue once per second and exits only after five cons
 | `/job retry <id>` | Create a new job and freeze the repository's current committed HEAD |
 | `/job setup` | Idempotently register/update `pi-jobs-worker` |
 | `/job doctor` | Inspect runtime, provider key presence, scheduler, locks, stale jobs, and worktrees |
+| `/job version` | Show the package version and detect a stale scheduled runner path |
 | `/job uninstall` | Remove only the scheduled task; preserve all data and Git artifacts |
 
 `/ns` remains as a deprecated compatibility alias for one major version. `/ns rm` maps to cancel and `/ns digest` maps to the active queue summary; every use displays a deprecation warning.
@@ -57,7 +93,7 @@ The worker rescans an empty queue once per second and exits only after five cons
 
 Requirements:
 
-- Windows with Node.js, Git worktree support, and Pi installed.
+- Windows with Node.js 22.19.0 or newer, Git worktree support, and Pi installed.
 - The provider API key stored as a **User-level Windows environment variable**. A scheduled task does not inherit keys exported only by `.bashrc`.
 - The machine must be awake and the user session must remain logged in; a locked screen is fine.
 
@@ -128,3 +164,11 @@ npm test
 ```
 
 The suite uses temporary repositories, isolated data roots, and a fake Pi JSONL RPC process. It does not call a real provider or alter `~/.pi/nightshift`.
+
+The clean-machine acceptance test also checks Pi package loading, command registration, fake-RPC branch delivery, and scheduler setup/doctor/uninstall under a unique temporary task name:
+
+```powershell
+npm run test:acceptance
+```
+
+GitHub Actions runs unit tests on Node.js 22.19.0 and 24.x, plus a separate distribution acceptance job. See [CHANGELOG.md](./CHANGELOG.md) for release history.

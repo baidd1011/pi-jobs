@@ -1,9 +1,36 @@
 {
   "name": "pi-jobs",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Auditable background job queue for the Pi coding agent",
   "private": true,
   "type": "module",
+  "license": "MIT",
+  "os": [
+    "win32"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "extension/jobs.ts",
+    "lib",
+    "runner",
+    "scripts",
+    "fake-pi.cmd",
+    "fake-pi.fixture.mjs",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baidd1011/pi-jobs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/baidd1011/pi-jobs/issues"
+  },
+  "homepage": "https://github.com/baidd1011/pi-jobs#readme",
   "keywords": [
     "pi-package"
   ],
@@ -15,7 +42,13 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
   "scripts": {
-    "test": "node --test --test-concurrency=1"
+    "test": "node --test --test-concurrency=1",
+    "test:acceptance": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/acceptance.ps1"
   }
 }
