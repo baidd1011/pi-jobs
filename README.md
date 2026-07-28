@@ -2,6 +2,8 @@
 
 简体中文 | [English](./README.en.md)
 
+[![CI](https://github.com/baidd1011/pi-jobs/actions/workflows/ci.yml/badge.svg)](https://github.com/baidd1011/pi-jobs/actions/workflows/ci.yml)
+
 `pi-jobs` 是为 Pi coding agent 提供的 Windows 优先、可审计后台任务队列。你可以在 Pi 会话中提交任务后离开终端，worker 会在隔离的 Git worktree 中继续执行，并以本地结果分支交付，同时持久记录状态、成本、日志和追加式审计事件。
 
 首个版本刻意保持串行和本地化：不创建或推送 PR、不并行执行任务、不唤醒睡眠中的计算机、不自动重试模型调用，也不支持 Windows 以外的调度器。
@@ -26,6 +28,39 @@ pi install git:github.com/baidd1011/pi-jobs@v1.0.0
 
 使用 `pi list` 可以查看 Git 包的实际安装位置。
 
+查看当前运行版本及计划任务是否仍指向当前安装包：
+
+```text
+/job version
+```
+
+### 升级
+
+Git tag 属于固定版本，不会被普通 `pi update` 自动移动。升级时安装新的 tag，然后刷新计划任务中的 runner 路径：
+
+```powershell
+pi install git:github.com/baidd1011/pi-jobs@vX.Y.Z
+```
+
+```text
+/reload
+/job version
+/job setup
+/job doctor
+```
+
+### 卸载
+
+必须先删除计划任务，再移除 Git 包；数据、日志、结果分支和遗留 worktree 都会保留：
+
+```text
+/job uninstall
+```
+
+```powershell
+pi remove git:github.com/baidd1011/pi-jobs
+```
+
 ## 执行模型
 
 1. `/job add` 固定当前仓库已提交的 `HEAD`，并原子写入 queued 任务。主工作区可以是 dirty，但未提交修改绝不会复制进任务。
@@ -49,6 +84,7 @@ pi install git:github.com/baidd1011/pi-jobs@v1.0.0
 | `/job retry <id>` | 创建新任务，并重新固定仓库当前已提交的 HEAD |
 | `/job setup` | 幂等注册或更新 `pi-jobs-worker` |
 | `/job doctor` | 检查运行环境、provider key、调度器、锁、stale 任务和 worktree |
+| `/job version` | 显示包版本，并检查计划任务 runner 路径是否过期 |
 | `/job uninstall` | 只删除计划任务，保留全部数据和 Git 产物 |
 
 `/ns` 在一个大版本内保留为弃用兼容别名。`/ns rm` 映射为 cancel，`/ns digest` 映射为活动队列摘要；每次使用都会显示弃用提示。
@@ -57,7 +93,7 @@ pi install git:github.com/baidd1011/pi-jobs@v1.0.0
 
 要求：
 
-- Windows，已安装 Node.js、支持 worktree 的 Git，以及 Pi。
+- Windows、Node.js 22.19.0 或更高版本、支持 worktree 的 Git，以及 Pi。
 - provider API key 必须保存为 **Windows 用户级环境变量**；计划任务无法继承只在 `.bashrc` 中 export 的 key。
 - 计算机必须保持唤醒，用户会话必须保持登录；锁屏不影响运行。
 
@@ -128,3 +164,11 @@ npm test
 ```
 
 测试套件使用临时仓库、隔离数据目录和假的 Pi JSONL RPC 进程，不会调用真实 provider，也不会修改 `~/.pi/nightshift`。
+
+完整的干净机验收还会验证 Pi 包加载、命令注册、假 RPC 分支交付，以及使用唯一临时任务名进行 scheduler setup/doctor/uninstall：
+
+```powershell
+npm run test:acceptance
+```
+
+GitHub Actions 会在 Node.js 22.19.0 和 24.x 上运行单元测试，并单独执行分发验收。版本变化记录在 [CHANGELOG.md](./CHANGELOG.md)。

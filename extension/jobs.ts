@@ -5,8 +5,9 @@ import {
   appendJobLog, createJob, listJobs, loadConfig, readJob, readJobLog, requestCancel,
 } from "../lib/store.mjs";
 import {
-  doctor, formatDoctor, setupScheduledTask, uninstallScheduledTask, wakeWorker,
+  RUNNER_PATH, doctor, formatDoctor, scheduledRunnerStatus, setupScheduledTask, uninstallScheduledTask, wakeWorker,
 } from "../lib/scheduler.mjs";
+import { PACKAGE_NAME, PACKAGE_VERSION } from "../lib/version.mjs";
 
 function takeFlag(text: string, name: string, fallback: number) {
   const match = text.match(new RegExp(`(?:^|\\s)--${name}\\s+(\\d+(?:\\.\\d+)?)`));
@@ -123,13 +124,23 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         case "doctor": send(pi, `**pi-jobs doctor**\n\n\`\`\`text\n${formatDoctor(doctor())}\n\`\`\``); return;
+        case "version": {
+          const runner = scheduledRunnerStatus();
+          send(pi, [
+            `**${PACKAGE_NAME} ${PACKAGE_VERSION}**`,
+            `Runner: \`${RUNNER_PATH}\``,
+            `Scheduled runner: ${runner.ok ? "current" : "needs /job setup"}`,
+            !runner.ok && runner.detail,
+          ].filter(Boolean).join("\n\n"));
+          return;
+        }
         case "uninstall": {
           const result = uninstallScheduledTask();
           ctx.ui.notify(`pi-jobs worker task removed; data preserved at ${result.dataPreserved}`, "info");
           return;
         }
         default:
-          ctx.ui.notify("usage: /job add|list|status|log|result|cancel|retry|setup|doctor|uninstall", "info");
+          ctx.ui.notify("usage: /job add|list|status|log|result|cancel|retry|setup|doctor|version|uninstall", "info");
       }
     } catch (error) {
       ctx.ui.notify(`pi-jobs: ${error}`, "error");
@@ -137,7 +148,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.registerCommand("job", {
-    description: "auditable background jobs: add, list, status, log, result, cancel, retry, setup, doctor, uninstall",
+    description: "auditable background jobs: add, list, status, log, result, cancel, retry, setup, doctor, version, uninstall",
     handler: handle,
   });
   pi.registerCommand("ns", {

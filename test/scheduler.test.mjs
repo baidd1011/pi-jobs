@@ -1,11 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.PI_JOBS_DATA_DIR = join(mkdtempSync(join(tmpdir(), "pi-jobs-scheduler-")), "data");
+const root = mkdtempSync(join(tmpdir(), "pi-jobs-scheduler-"));
+process.env.PI_JOBS_DATA_DIR = join(root, "data");
+process.env.PI_JOBS_LEGACY_DIR = join(root, "missing-legacy");
+process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
+writeFileSync(join(process.env.PI_CODING_AGENT_DIR, "settings.json"), JSON.stringify({ defaultProvider: "isolated-provider", defaultModel: "isolated-model" }));
 const scheduler = await import(`../lib/scheduler.mjs?scheduler=${Date.now()}`);
 
 test("setup script uses ScheduledTasks Queue policy and one repeating task", () => {
@@ -29,10 +34,23 @@ test("installed ScheduledTasks module accepts Queue settings on Windows", { skip
 test("doctor covers separate runner/pi paths, scheduler, locks, stale jobs and sync roots", () => {
   const report = scheduler.doctor();
   const names = report.checks.map((check) => check.name);
-  for (const expected of ["Node runner", "Runner file", "Pi executable", "Scheduled task", "Runner lock", "Stale jobs", "Legacy worktrees", "Terminal heartbeats", "Worktree root", "User API key"]) {
+  for (const expected of ["Node runner", "Runner file", "Pi executable", "Scheduled task", "Scheduled runner path", "Runner lock", "Stale jobs", "Legacy worktrees", "Terminal heartbeats", "Worktree root", "User API key"]) {
     assert.ok(names.includes(expected), expected);
   }
+  assert.equal(report.config.provider, "isolated-provider");
+  assert.equal(report.config.model, "isolated-model");
   assert.doesNotMatch(JSON.stringify(report), /sk-[A-Za-z0-9]/);
+});
+
+test("scheduled runner status distinguishes current and stale package paths", () => {
+  const current = scheduler.assessScheduledRunner({ ok: true, detail: { Arguments: '"C:\\pkg\\runner\\run.mjs"' } }, "C:\\pkg\\runner\\run.mjs");
+  assert.equal(current.ok, true);
+
+  const stale = scheduler.assessScheduledRunner({ ok: true, detail: { Arguments: '"C:\\old\\runner\\run.mjs"' } }, "C:\\new\\runner\\run.mjs");
+  assert.equal(stale.ok, false);
+  assert.match(stale.detail, /run \/job setup/);
+  assert.match(stale.detail, /C:\\old/);
+  assert.match(stale.detail, /C:\\new/);
 });
 
 test("uninstall script removes only the scheduled task and contains no data deletion", () => {
