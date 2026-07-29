@@ -150,3 +150,17 @@ test("detached HEAD submission records a null baseRef and still delivers", async
   assert.equal(terminal.delivery.status, "branch-ready");
   assert.equal(git(repo, "rev-parse", "HEAD"), head);
 });
+
+test("runOne captures the runtime field once when entering the agent phase", async () => {
+  const repo = makeRepo("runtime-repo");
+  const cfg = configFor("worktrees-runtime");
+  const created = add(repo, "runtime task");
+  const claimed = store.claimNextJob("worker-runtime");
+  const terminal = await runner.runOne(claimed, { ...cfg, provider: "test-provider", model: "test-model", piPath: process.execPath }, success);
+  const persisted = store.readJob(created.id);
+  assert.equal(persisted.runtime.provider, "test-provider");
+  assert.equal(persisted.runtime.model, "test-model");
+  assert.equal(persisted.runtime.piPath, process.execPath);
+  assert.ok(persisted.runtime.capturedAt, "capturedAt is set");
+  assert.equal(terminal.runtime.provider, "test-provider");
+});

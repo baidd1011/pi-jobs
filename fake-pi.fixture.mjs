@@ -2,12 +2,12 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const mode = process.argv[2] || "done";
-if (process.env.FAKE_PI_INVOCATIONS) appendFileSync(process.env.FAKE_PI_INVOCATIONS, `${mode}\n`);
 let buffer = "";
 const emit = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 
 function handle(message) {
   if (message.type === "prompt") {
+    if (process.env.FAKE_PI_INVOCATIONS) appendFileSync(process.env.FAKE_PI_INVOCATIONS, `${mode}\n`);
     if (process.env.FAKE_PI_CREATE) writeFileSync(join(process.cwd(), process.env.FAKE_PI_CREATE), "created by fake pi\n");
     if (mode === "done") {
       emit({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "fake task complete" }] } });

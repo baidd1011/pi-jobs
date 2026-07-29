@@ -13,7 +13,7 @@ The first release is deliberately sequential and local: it does not create or pu
 Install a pinned release tag:
 
 ```powershell
-pi install git:github.com/baidd1011/pi-jobs@v1.0.0
+pi install git:github.com/baidd1011/pi-jobs@v1.2.0
 ```
 
 If `extension/nightshift.ts` or `extension/jobs.ts` was previously registered manually, disable that old entry in `pi config` first to avoid duplicate command registration.
@@ -82,12 +82,17 @@ The worker rescans an empty queue once per second and exits only after five cons
 | `/job result <id>` | Show the result branch, summary, and review command |
 | `/job cancel <id>` | Cancel immediately if queued or signal the running RPC process |
 | `/job retry <id>` | Create a new job and freeze the repository's current committed HEAD |
+| `/job digest [--hours N] [--markdown] [--notify]` | Summarise the last N hours (default 24h) with a per-job review command, an extra list of all open `cleanup-needed` jobs, optional Markdown output, and optional Windows toast |
+| `/job audit <id>` | Render a full audit in Pi and atomically write `~/.pi/jobs/reports/audits/<id>-r<revision>.md` |
+| `/job cleanup [--dry-run]` | Safely remove terminal heartbeats, cancel markers, qualified temp files, and clean, commit-matching worktrees; everything else is reported with a reason and a suggested command |
 | `/job setup` | Idempotently register/update `pi-jobs-worker` |
-| `/job doctor` | Inspect runtime, provider key presence, scheduler, locks, stale jobs, and worktrees |
+| `/job doctor` | Inspect runtime, provider key presence, scheduler, locks, stale jobs, and worktrees; no longer auto-deletes terminal heartbeats |
 | `/job version` | Show the package version and detect a stale scheduled runner path |
 | `/job uninstall` | Remove only the scheduled task; preserve all data and Git artifacts |
 
-`/ns` remains as a deprecated compatibility alias for one major version. `/ns rm` maps to cancel and `/ns digest` maps to the active queue summary; every use displays a deprecation warning.
+`/ns` remains as a deprecated compatibility alias for one major version. `/ns rm` maps to cancel and `/ns digest` maps to the new digest command; every use displays a deprecation warning.
+
+Cleanup scans atomic temporary files only in the data root and `jobs/control/heartbeats/locks`; it never descends into `worktrees/logs/reports`. Before deletion it revalidates job state, file identity, worktree cleanliness, and the recorded result commit. `--dry-run` lists every `would-remove` target, and unknown arguments are rejected.
 
 ## Setup
 
@@ -132,12 +137,16 @@ control/<id>.cancel.json cancellation signals
 heartbeats/<id>.json     lightweight worker liveness (no revision/event)
 logs/<id>.log            per-job logs
 worktrees/<id>/          isolated temporary Git worktrees
+reports/digests/         Markdown reports written by /job digest
+reports/audits/          Markdown reports written by /job audit
 runner.lock              PID + process-start-time + token ownership lock
 ```
 
 Job states are `queued`, `running`, `done`, `failed`, `overbudget`, `timeout`, and `canceled`. Running phases are `preparing`, `agent`, and `finalizing`. Delivery is always local branch delivery with status `not-started`, `pending`, `branch-ready`, `no-changes`, or `failed`.
 
-`events.jsonl` is never consulted to make runtime decisions. Job writes happen first and event appends second; startup derives any missing revision events. Heartbeats are written separately every 30 seconds and are stale after five minutes.
+New jobs use schema v3: the worker persists `runtime: { provider, model, piVersion, piPath, capturedAt }` once when entering the agent phase and never rewrites it. Older v1/v2 jobs stay read-only; missing fields render as `unknown / not recorded` in audit output and are never faked from the current environment.
+
+`events.jsonl` is never consulted to make runtime decisions. Job writes happen first and event appends second; startup derives any missing revision events. Heartbeats are written separately every 30 seconds and are stale after five minutes. `/job doctor` only reports the count of terminal heartbeats and points the user at `/job cleanup`; it no longer removes them on the fly.
 
 ## Stops and recovery
 
