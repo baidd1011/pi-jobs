@@ -85,7 +85,7 @@ test("prioritize moves queued jobs to the front deterministically and is audited
   store.completeJob(c.id, { state: "canceled", phase: null, finishedAt: new Date().toISOString(), delivery: { status: "not-started" } });
 });
 
-test("queue state is authoritative and missing derived events are reconciled by revision", () => {
+test("queue state is authoritative and missing derived events are diagnosed without mutation", () => {
   store.setQueuePaused(true, "queue-reconcile", "2026-07-30T02:00:00.000Z");
   store.setQueuePaused(false, "queue-reconcile", "2026-07-30T02:01:00.000Z");
   const state = store.readQueueState();
@@ -93,9 +93,11 @@ test("queue state is authoritative and missing derived events are reconciled by 
   const removedRevision = state.revision;
   writeFileSync(store.QUEUE_EVENTS_PATH, events.filter((event) => event.revision !== removedRevision).map((event) => JSON.stringify(event)).join("\n") + "\n");
   assert.equal(store.readQueueState().paused, false, "derived log loss cannot alter queue state");
-  assert.equal(store.reconcileQueueEvents(), 1);
-  assert.equal(store.reconcileQueueEvents(), 0);
-  const repaired = store.readQueueEvents().find((event) => event.revision === removedRevision);
-  assert.equal(repaired.reason, "queue:event-reconciled");
-  assert.equal(readFileSync(store.QUEUE_EVENTS_PATH, "utf8").split(/\r?\n/).filter(Boolean).map(JSON.parse).filter((event) => event.revision === removedRevision).length, 1);
+  const before = readFileSync(store.QUEUE_EVENTS_PATH, "utf8");
+  assert.deepEqual(store.inspectQueueAudit().missingRevisions, [removedRevision]);
+  assert.equal(readFileSync(store.QUEUE_EVENTS_PATH, "utf8"), before, "diagnosis must not invent queue history");
+  store.setQueuePaused(true, "queue-after-gap", "2026-07-30T02:02:00.000Z");
+  assert.equal(store.readQueueState().paused, true);
+  assert.ok(store.readQueueEvents().some((event) => event.reason !== "queue:event-reconciled" && event.revision === removedRevision + 1));
+  store.setQueuePaused(false, "queue-after-gap", "2026-07-30T02:03:00.000Z");
 });

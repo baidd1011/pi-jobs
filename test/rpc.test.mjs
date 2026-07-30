@@ -51,6 +51,19 @@ test("settled model error is failed rather than done", async () => {
   assert.match(result.error, /fake 401/);
 });
 
+test("fake Pi errors are redacted before reaching job persistence", async () => {
+  const secret = `ghp_${"Z".repeat(36)}`;
+  process.env.FAKE_PI_ERROR = `Authorization: Bearer ${secret} https://alice:secret@github.com/example/project.git`;
+  try {
+    const result = await runPiTask(task(), config("error"));
+    assert.equal(result.status, "failed");
+    assert.doesNotMatch(result.error, /ghp_|alice:secret|Bearer\s+ghp_/);
+    assert.match(result.error, /\[REDACTED\]/);
+  } finally {
+    delete process.env.FAKE_PI_ERROR;
+  }
+});
+
 test("budget stop is persisted before abort and produces overbudget", async () => {
   const persisted = [];
   const result = await runPiTask(task({ budgetUsd: 0.1 }), config("budget"), null, {

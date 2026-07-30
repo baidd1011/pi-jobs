@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import {
   DATA_DIR, HEARTBEAT_MS, TERMINAL_STATES, acquireRunnerLock, appendJobLog, completeJob,
   claimNextJob, clearCancelMarker, clearHeartbeat, ensureDirs, isHeartbeatStale,
-  listJobs, loadConfig, readJob, reconcileEvents, reconcileQueueEvents, recordStopRequest,
+  listJobs, loadConfig, readJob, reconcileEvents, recordStopRequest, scanJobRecords,
   readCancelMarker, releaseRunnerLock, transitionJob, updateJobMetadata, writeHeartbeat,
 } from "../lib/store.mjs";
 import { branchExists, createJobWorktree, finalizeJobWorktree, jobBranch, jobWorktreePath } from "../lib/gitops.mjs";
@@ -14,11 +14,12 @@ import { migrateLegacyData } from "../lib/migrate.mjs";
 import { resolveExecutionPolicy, runPiTask } from "../lib/rpc.mjs";
 import { captureRuntime } from "../lib/runtime.mjs";
 import { deliverPullRequest } from "../lib/pr-delivery.mjs";
+import { redactSensitive, safeError } from "../lib/redact.mjs";
 
 const date = () => new Date().toISOString().slice(0, 10);
 
 function runnerLog(message) {
-  const line = `[${new Date().toISOString()}] ${message}`;
+  const line = `[${new Date().toISOString()}] ${redactSensitive(message)}`;
   console.log(line);
   try { appendFileSync(join(DATA_DIR, "logs", `runner-${date()}.log`), line + "\n"); } catch {}
 }
@@ -306,7 +307,12 @@ export async function drainQueue(config, options = {}) {
 
 export async function main() {
   ensureDirs();
-  const config = loadConfig();
+  let config;
+  try { config = loadConfig(); }
+  catch (error) {
+    runnerLog(`configuration error; no job was claimed: ${safeError(error)}`);
+    throw error;
+  }
   const lock = acquireRunnerLock();
   if (lock.held) { runnerLog("another worker owns the runner lock; exiting"); return; }
   try {
@@ -314,8 +320,8 @@ export async function main() {
     if (migration.imported) runnerLog(`imported ${migration.imported} legacy nightshift record(s)`);
     const repaired = reconcileEvents();
     if (repaired) runnerLog(`repaired ${repaired} missing audit event(s)`);
-    const queueRepaired = reconcileQueueEvents();
-    if (queueRepaired) runnerLog(`repaired ${queueRepaired} missing queue audit event(s)`);
+    const unhealthy = scanJobRecords().issues;
+    if (unhealthy.length) runnerLog(`skipping ${unhealthy.length} unhealthy job record(s): ${unhealthy.map((issue) => issue.path).join(", ")}`);
     const recovered = recoverStaleJobs(config);
     if (recovered.length) runnerLog(`recovered ${recovered.length} stale job(s) without calling the model`);
     const processed = await drainQueue(config, {
@@ -329,4 +335,4 @@ export async function main() {
 }
 
 const invoked = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
-if (invoked) main().catch((error) => { console.error(error); process.exitCode = 1; });
+if (invoked) main().catch((error) => { console.error(safeError(error)); process.exitCode = 1; });
