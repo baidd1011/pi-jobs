@@ -8,6 +8,10 @@ import {
   RUNNER_PATH, doctor, formatDoctor, scheduledRunnerStatus, setupScheduledTask, uninstallScheduledTask, wakeWorker,
 } from "../lib/scheduler.mjs";
 import { PACKAGE_NAME, PACKAGE_VERSION } from "../lib/version.mjs";
+import { buildAudit, buildDigest, renderAuditText, renderDigestText, writeAuditReport, writeDigestReport } from "../lib/report.mjs";
+import { cleanup, formatCleanupResults } from "../lib/cleanup.mjs";
+import { sendWindowsToast } from "../lib/notify.mjs";
+import { parseCleanupArgs, parseDigestArgs } from "../lib/command-args.mjs";
 
 function takeFlag(text: string, name: string, fallback: number) {
   const match = text.match(new RegExp(`(?:^|\\s)--${name}\\s+(\\d+(?:\\.\\d+)?)`));
@@ -117,6 +121,41 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify(`pi-jobs: queued retry ${retry.id} of ${old.id}${wake.started ? "" : "; worker start failed—run /job setup"}`, wake.started ? "info" : "warning");
           return;
         }
+        case "digest": {
+          const { hours, markdown, notify } = parseDigestArgs(rest);
+          const digest = buildDigest({ hours });
+          let path: string | null = null;
+          if (markdown) path = writeDigestReport(digest);
+          let warning: string | null = null;
+          if (notify) {
+            const toast = sendWindowsToast({
+              title: `pi-jobs digest (${digest.counts.done} done, ${digest.counts.failed} stopped, ${digest.counts.canceled} canceled)`,
+              body: `Cost $${digest.totals.cost.toFixed(4)} · ${digest.counts.cleanupNeeded} cleanup-needed`,
+            });
+            if (!toast.ok) warning = `toast: ${toast.error}`;
+          }
+          const text = renderDigestText(digest);
+          const suffix = path ? `\n\n_Written: \`${path}\`_` : "";
+          const warn = warning ? `\n\n⚠ ${warning}` : "";
+          send(pi, `${text}${suffix}${warn}`);
+          return;
+        }
+        case "audit": {
+          const id = rest.trim();
+          if (!id) return ctx.ui.notify("usage: /job audit <id>", "warning");
+          const audit = buildAudit(id);
+          if (!audit.available) return ctx.ui.notify(`pi-jobs: ${audit.reason}`, "warning");
+          const path = writeAuditReport(audit);
+          send(pi, `${renderAuditText(audit)}\n\n_Written: \`${path}\`_`);
+          return;
+        }
+        case "cleanup": {
+          const { dryRun } = parseCleanupArgs(rest);
+          const config = loadConfig();
+          const result = cleanup({ dryRun, config });
+          send(pi, `**pi-jobs cleanup${dryRun ? " (dry-run)" : ""}**\n\n${formatCleanupResults(result.results, dryRun)}`);
+          return;
+        }
         case "setup": {
           const result = setupScheduledTask();
           wakeWorker("setup");
@@ -140,7 +179,7 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         default:
-          ctx.ui.notify("usage: /job add|list|status|log|result|cancel|retry|setup|doctor|version|uninstall", "info");
+          ctx.ui.notify("usage: /job add|list|status|log|result|cancel|retry|digest|audit|cleanup|setup|doctor|version|uninstall", "info");
       }
     } catch (error) {
       ctx.ui.notify(`pi-jobs: ${error}`, "error");
@@ -148,7 +187,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.registerCommand("job", {
-    description: "auditable background jobs: add, list, status, log, result, cancel, retry, setup, doctor, version, uninstall",
+    description: "auditable background jobs: add, list, status, log, result, cancel, retry, digest, audit, cleanup, setup, doctor, version, uninstall",
     handler: handle,
   });
   pi.registerCommand("ns", {
@@ -156,7 +195,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (args: string, ctx: any) => {
       ctx.ui.notify("/ns is deprecated; use /job (compatibility alias will be removed in a future major version)", "warning");
       const trimmed = (args || "").trim();
-      const mapped = trimmed.replace(/^rm(?:\s+|$)/, "cancel ").replace(/^digest(?:\s*)$/, "list");
+      const mapped = trimmed.replace(/^rm(?:\s+|$)/, "cancel ").replace(/^digest(?:\s*)$/, "digest");
       return handle(mapped, ctx);
     },
   });

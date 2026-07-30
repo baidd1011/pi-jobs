@@ -12,6 +12,7 @@ import {
 import { branchExists, createJobWorktree, finalizeJobWorktree, jobBranch, jobWorktreePath } from "../lib/gitops.mjs";
 import { migrateLegacyData } from "../lib/migrate.mjs";
 import { runPiTask } from "../lib/rpc.mjs";
+import { captureRuntime } from "../lib/runtime.mjs";
 
 const date = () => new Date().toISOString().slice(0, 10);
 
@@ -114,8 +115,9 @@ export async function runOne(job, config, rpcRunner = runPiTask) {
     heartbeatTimer = setInterval(() => { try { writeHeartbeat(job.id, workerToken); } catch {} }, heartbeatEvery);
 
     createJobWorktree(current, config);
+    const runtime = captureRuntime(current, config);
     current = transitionJob(job.id, {
-      phase: "agent", delivery: { type: "branch", status: "pending", branch, commit: null },
+      phase: "agent", runtime, delivery: { type: "branch", status: "pending", branch, commit: null },
     }, "phase:agent");
     writeHeartbeat(job.id, workerToken);
     jobLog(job.id, `agent started in ${worktreePath}`);

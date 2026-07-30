@@ -13,7 +13,7 @@
 从固定版本标签安装：
 
 ```powershell
-pi install git:github.com/baidd1011/pi-jobs@v1.0.0
+pi install git:github.com/baidd1011/pi-jobs@v1.2.0
 ```
 
 如果此前手动注册过 `extension/nightshift.ts` 或 `extension/jobs.ts`，请先在 `pi config` 中禁用旧入口，避免命令重复注册。
@@ -82,12 +82,17 @@ pi remove git:github.com/baidd1011/pi-jobs
 | `/job result <id>` | 查看结果分支、摘要和 review 命令 |
 | `/job cancel <id>` | queued 时立即取消，running 时通知 RPC 进程停止 |
 | `/job retry <id>` | 创建新任务，并重新固定仓库当前已提交的 HEAD |
+| `/job digest [--hours N] [--markdown] [--notify]` | 汇总最近 N 小时（默认 24h）完成的任务，附 review 命令；额外列出全部尚未解决的 cleanup-needed；可写 Markdown 或发 Windows Toast |
+| `/job audit <id>` | 在 Pi 中展示完整审计报告，并默认写入 `~/.pi/jobs/reports/audits/<id>-r<revision>.md` |
+| `/job cleanup [--dry-run]` | 安全清理终态 heartbeat、cancel marker、合格临时文件和 clean/commit 匹配的 worktree；其余只列出原因和建议命令 |
 | `/job setup` | 幂等注册或更新 `pi-jobs-worker` |
-| `/job doctor` | 检查运行环境、provider key、调度器、锁、stale 任务和 worktree |
+| `/job doctor` | 检查运行环境、provider key、调度器、锁、stale 任务和 worktree；不再顺手清理终态 heartbeat |
 | `/job version` | 显示包版本，并检查计划任务 runner 路径是否过期 |
 | `/job uninstall` | 只删除计划任务，保留全部数据和 Git 产物 |
 
-`/ns` 在一个大版本内保留为弃用兼容别名。`/ns rm` 映射为 cancel，`/ns digest` 映射为活动队列摘要；每次使用都会显示弃用提示。
+`/ns` 在一个大版本内保留为弃用兼容别名。`/ns rm` 映射为 cancel，`/ns digest` 映射为新的 digest 命令；每次使用都会显示弃用提示。
+
+cleanup 的临时文件扫描仅限数据根目录及 `jobs/control/heartbeats/locks`，不会进入 `worktrees/logs/reports`。真正删除前会重新检查任务状态、文件指纹、worktree cleanliness 和结果 commit；`--dry-run` 会逐项显示 `would-remove`，任何未知参数都会被拒绝。
 
 ## 设置
 
@@ -132,12 +137,16 @@ control/<id>.cancel.json 取消信号
 heartbeats/<id>.json     轻量 worker 存活信息（不增加 revision/event）
 logs/<id>.log            每任务日志
 worktrees/<id>/          隔离的临时 Git worktree
+reports/digests/         /job digest 写出的 Markdown 报告
+reports/audits/          /job audit 写出的 Markdown 报告
 runner.lock              PID + 进程启动时间 + token 所有权锁
 ```
 
 任务状态包括 `queued`、`running`、`done`、`failed`、`overbudget`、`timeout` 和 `canceled`。运行阶段包括 `preparing`、`agent` 和 `finalizing`。交付始终是本地分支，状态为 `not-started`、`pending`、`branch-ready`、`no-changes` 或 `failed`。
 
-运行时决策不会读取 `events.jsonl`。任务记录先写入，审计事件随后追加；启动时会补写缺失 revision 的事件。heartbeat 每 30 秒单独写入，超过 5 分钟视为 stale。
+新任务使用 schema v3：进入 agent 阶段时会一次性持久化 `runtime: { provider, model, piVersion, piPath, capturedAt }`，后续不会改写。旧 v1/v2 任务保持只读，缺失字段在 audit 中显示为 `unknown / not recorded`，绝不根据当前环境伪造历史值。
+
+运行时决策不会读取 `events.jsonl`。任务记录先写入，审计事件随后追加；启动时会补写缺失 revision 的事件。heartbeat 每 30 秒单独写入，超过 5 分钟视为 stale。`/job doctor` 只报告终态 heartbeat 数量并提示运行 `/job cleanup`，不再顺手删除。
 
 ## 停止与恢复
 
