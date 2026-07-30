@@ -34,7 +34,7 @@ test("installed ScheduledTasks module accepts Queue settings on Windows", { skip
 test("doctor covers separate runner/pi paths, scheduler, locks, stale jobs and sync roots", () => {
   const report = scheduler.doctor();
   const names = report.checks.map((check) => check.name);
-  for (const expected of ["Node runner", "Runner file", "Pi executable", "Scheduled task", "Scheduled runner path", "Runner lock", "Stale jobs", "Legacy worktrees", "Terminal heartbeats", "Worktree root", "User API key"]) {
+  for (const expected of ["Configuration", "Job records", "Queue audit", "Node runner", "Runner file", "Pi executable", "Scheduled task", "Scheduled runner path", "Runner lock", "Stale jobs", "Legacy worktrees", "Terminal heartbeats", "Worktree root", "User API key"]) {
     assert.ok(names.includes(expected), expected);
   }
   assert.equal(report.config.provider, "isolated-provider");

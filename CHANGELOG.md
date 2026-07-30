@@ -4,6 +4,29 @@ All notable changes to this project are documented in this file. The project fol
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-30
+
+### Added
+
+- Recommended `--local-tools-only` task policy name, with the same auditable tool-only restriction previously exposed as `--no-network`.
+- Read-only job-record health scanning in the worker, `/job list`, and `/job doctor`; malformed, mismatched, or incomplete records are preserved and surfaced by path while healthy jobs continue.
+- Deterministic next-action guidance for `delivery-failed`, `cleanup-needed`, and `worker-error` results.
+
+### Changed
+
+- Configuration loading is fail-closed: malformed, invalid, or unreadable `config.json` stops the worker before claim and is never silently replaced or overwritten. Doctor remains available and diagnoses the original file read-only.
+- Queue-event recovery no longer fabricates missing from/to history. `queue-state.json` remains authoritative; doctor reports derived-log revision gaps without modifying `queue-events.jsonl`.
+- UI, job/delivery errors, runner and job logs, doctor command failures, audit, and digest paths share focused credential redaction for URL userinfo, Authorization headers, and common GitHub token formats.
+- Policy wording in status and reports now uses `local-tools-only` while schema v4 continues to store `policy.noNetwork` for compatibility.
+
+### Deprecated
+
+- `--no-network`, `/job digest --notify`, and `/ns` remain functional but now name their v2.0.0 removal. Use `--local-tools-only`, a plain/Markdown digest, and `/job` respectively.
+
+### Security
+
+- External Pi, Git, GitHub CLI, and scheduler failures are sanitized before persistence or display, without broadly rewriting prompts, summaries, or code content.
+
 ## [1.3.0] - 2026-07-30
 
 ### Added
@@ -78,7 +101,8 @@ All notable changes to this project are documented in this file. The project fol
 - Budget, timeout, cancellation, crash recovery, heartbeat, migration, and doctor support.
 - Initial 34-test fake-RPC and Git integration suite.
 
-[Unreleased]: https://github.com/baidd1011/pi-jobs/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/baidd1011/pi-jobs/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/baidd1011/pi-jobs/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/baidd1011/pi-jobs/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/baidd1011/pi-jobs/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/baidd1011/pi-jobs/compare/v1.0.0...v1.1.0

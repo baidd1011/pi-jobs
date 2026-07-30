@@ -2,18 +2,22 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { inspectRepo } from "../lib/gitops.mjs";
 import { migrateLegacyData } from "../lib/migrate.mjs";
 import {
-  appendJobLog, createJob, generateJobId, listJobs, loadConfig, prioritizeJob, readJob, readJobLog,
-  readQueueState, requestCancel, setQueuePaused,
+  appendJobLog, createJob, generateJobId, loadConfig, prioritizeJob, readJob, readJobLog,
+  readQueueState, requestCancel, scanJobRecords, setQueuePaused,
 } from "../lib/store.mjs";
 import {
   RUNNER_PATH, doctor, formatDoctor, scheduledRunnerStatus, setupScheduledTask, uninstallScheduledTask, wakeWorker,
 } from "../lib/scheduler.mjs";
 import { PACKAGE_NAME, PACKAGE_VERSION } from "../lib/version.mjs";
-import { buildAudit, buildDigest, renderAuditText, renderDigestText, writeAuditReport, writeDigestReport } from "../lib/report.mjs";
+import { buildAudit, buildDigest, nextAction, renderAuditText, renderDigestText, writeAuditReport, writeDigestReport } from "../lib/report.mjs";
 import { cleanup, formatCleanupResults } from "../lib/cleanup.mjs";
 import { sendWindowsToast } from "../lib/notify.mjs";
-import { parseAddArgs, parseCleanupArgs, parseDigestArgs, parseJobIdArg, parseNoArgs, parseSetupPrArgs } from "../lib/command-args.mjs";
+import {
+  DIGEST_NOTIFY_DEPRECATION, NO_NETWORK_DEPRECATION, NS_DEPRECATION,
+  parseAddArgs, parseCleanupArgs, parseDigestArgs, parseJobIdArg, parseNoArgs, parseSetupPrArgs,
+} from "../lib/command-args.mjs";
 import { configurePrRepository, inspectPrSetup, preflightPrJob } from "../lib/pr-delivery.mjs";
+import { safeError } from "../lib/redact.mjs";
 
 function stateLine(job: any) {
   const phase = job.phase ? `/${job.phase}` : "";
@@ -43,7 +47,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   const handle = async (rawArgs: string, ctx: any) => {
-    try { migrateLegacyData(); } catch (error) { ctx.ui.notify(`pi-jobs migration warning: ${error}`, "warning"); }
+    try { migrateLegacyData(); } catch (error) { ctx.ui.notify(`pi-jobs migration warning: ${safeError(error)}`, "warning"); }
     const trimmed = (rawArgs || "").trim();
     const split = trimmed.indexOf(" ");
     const sub = (split < 0 ? trimmed : trimmed.slice(0, split)).toLowerCase();
@@ -54,6 +58,7 @@ export default function (pi: ExtensionAPI) {
         case "add": {
           const config = loadConfig();
           const parsed = parseAddArgs(rest, config);
+          if (parsed.deprecatedNoNetwork) ctx.ui.notify(NO_NETWORK_DEPRECATION, "warning");
           const repo = inspectRepo(ctx.cwd);
           const id = generateJobId();
           let delivery: any = { type: "branch", status: "not-started", branch: null, commit: null };
@@ -77,9 +82,13 @@ export default function (pi: ExtensionAPI) {
         }
         case "list": {
           const all = /(?:^|\s)--all(?:\s|$)/.test(rest);
-          const jobs = listJobs({ all });
+          const scan = scanJobRecords({ all });
+          const jobs = scan.jobs;
           const paused = readQueueState().paused ? " — **PAUSED**" : "";
-          send(pi, jobs.length ? `**pi-jobs ${all ? "history" : "active queue"}${paused}**\n\n${jobs.map(stateLine).join("\n")}` : `pi-jobs queue is empty${paused}`);
+          const unhealthy = scan.issues.length
+            ? `\n\n⚠ ${scan.issues.length} unhealthy job record(s) were preserved and skipped:\n${scan.issues.map((issue: any) => `- \`${issue.path}\` — ${issue.detail}`).join("\n")}`
+            : "";
+          send(pi, `${jobs.length ? `**pi-jobs ${all ? "history" : "active queue"}${paused}**\n\n${jobs.map(stateLine).join("\n")}` : `pi-jobs queue is empty${paused}`}${unhealthy}`);
           return;
         }
         case "status": {
@@ -93,12 +102,13 @@ export default function (pi: ExtensionAPI) {
             job.dirtyAtSubmit && "⚠ The submit workspace was dirty; uncommitted changes were not included.",
             job.migrationBaseApproximate && "⚠ Legacy pending job used the committed HEAD at migration time as an approximate base.",
             `Budget/timeout: $${job.budgetUsd} / ${job.timeoutMin}m`,
-            `Policy: tools=${job.policy?.tools?.join(",") || "unknown"}; no-network=${job.policy?.noNetwork ?? "unknown"}; max-turns=${job.policy?.maxTurns ?? job.maxTurns ?? "unknown"}`,
+            `Policy: tools=${job.policy?.tools?.join(",") || "unknown"}; local-tools-only=${job.policy?.noNetwork ?? "unknown"}; max-turns=${job.policy?.maxTurns ?? job.maxTurns ?? "unknown"}`,
             `Cost: $${Number(job.costUsd || 0).toFixed(4)}`,
             `Delivery: ${job.delivery?.status}${job.delivery?.branch ? ` — \`${job.delivery.branch}\`` : ""}`,
             job.delivery?.prUrl && `PR: ${job.delivery.prUrl}`,
             job.stopCause && `Stop: ${job.stopCause} at ${job.stopRequestedAt}`,
             `Revision: ${job.revision}`,
+            nextAction(job) && `Next: ${nextAction(job)}`,
           ].filter(Boolean);
           send(pi, fields.join("\n\n"));
           return;
@@ -115,7 +125,8 @@ export default function (pi: ExtensionAPI) {
           const delivery = job.delivery || {};
           const review = delivery.branch && job.baseCommit ? `\n\nReview: \`git -C "${job.repoRoot}" diff ${job.baseCommit}..${delivery.branch}\`` : "";
           const pr = delivery.prUrl ? `\n\nDraft PR: ${delivery.prUrl}` : "";
-          send(pi, `**${job.source === "legacy-nightshift" ? "legacy-nightshift" : "pi-jobs"} result ${job.id}**\n\nState: ${job.state}${job.statusDetail ? ` (${job.statusDetail})` : ""}\n\nDelivery: ${delivery.status}${delivery.branch ? ` — \`${delivery.branch}\`` : ""}${delivery.commit ? ` @ \`${delivery.commit}\`` : ""}${pr}\n\n${job.summary || "(no summary)"}${review}`);
+          const action = nextAction(job);
+          send(pi, `**${job.source === "legacy-nightshift" ? "legacy-nightshift" : "pi-jobs"} result ${job.id}**\n\nState: ${job.state}${job.statusDetail ? ` (${job.statusDetail})` : ""}\n\nDelivery: ${delivery.status}${delivery.branch ? ` — \`${delivery.branch}\`` : ""}${delivery.commit ? ` @ \`${delivery.commit}\`` : ""}${pr}\n\n${job.summary || "(no summary)"}${review}${action ? `\n\nNext: ${action}` : ""}`);
           return;
         }
         case "cancel": {
@@ -183,7 +194,8 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         case "digest": {
-          const { hours, markdown, notify } = parseDigestArgs(rest);
+          const { hours, markdown, notify, deprecatedNotify } = parseDigestArgs(rest);
+          if (deprecatedNotify) ctx.ui.notify(DIGEST_NOTIFY_DEPRECATION, "warning");
           const digest = buildDigest({ hours });
           let path: string | null = null;
           if (markdown) path = writeDigestReport(digest);
@@ -243,7 +255,7 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("usage: /job add|list|status|log|result|cancel|retry|setup-pr|pause|resume|prioritize|digest|audit|cleanup|setup|doctor|version|uninstall", "info");
       }
     } catch (error) {
-      ctx.ui.notify(`pi-jobs: ${error}`, "error");
+      ctx.ui.notify(`pi-jobs: ${safeError(error)}`, "error");
     }
   };
 
@@ -254,7 +266,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("ns", {
     description: "deprecated compatibility alias for /job",
     handler: async (args: string, ctx: any) => {
-      ctx.ui.notify("/ns is deprecated; use /job (compatibility alias will be removed in a future major version)", "warning");
+      ctx.ui.notify(NS_DEPRECATION, "warning");
       const trimmed = (args || "").trim();
       const mapped = trimmed.replace(/^rm(?:\s+|$)/, "cancel ").replace(/^digest(?:\s*)$/, "digest");
       return handle(mapped, ctx);

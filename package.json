@@ -1,6 +1,6 @@
 {
   "name": "pi-jobs",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Auditable background job queue for the Pi coding agent",
   "private": true,
   "type": "module",

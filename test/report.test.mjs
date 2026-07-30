@@ -348,8 +348,8 @@ test("schema v4 audit renders requested/effective policy and Draft PR delivery",
     },
   });
   const markdown = report.renderAuditMarkdown(report.buildAudit(job.id));
-  assert.match(markdown, /Requested policy.*read,grep,find.*no-network `true`.*max-turns `20`/);
-  assert.match(markdown, /Effective policy.*read,grep,find.*no-network `true`.*max-turns `20`/);
+  assert.match(markdown, /Requested policy.*read,grep,find.*local-tools-only `true`.*max-turns `20`/);
+  assert.match(markdown, /Effective policy.*read,grep,find.*local-tools-only `true`.*max-turns `20`/);
   assert.match(markdown, /Draft PR https:\/\/github\.com\/example\/project\/pull\/42/);
 });
 

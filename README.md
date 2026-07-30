@@ -13,7 +13,7 @@
 从固定版本标签安装：
 
 ```powershell
-pi install git:github.com/baidd1011/pi-jobs@v1.3.0
+pi install git:github.com/baidd1011/pi-jobs@v1.4.0
 ```
 
 如果此前手动注册过 `extension/nightshift.ts` 或 `extension/jobs.ts`，请先在 `pi config` 中禁用旧入口，避免命令重复注册。
@@ -75,9 +75,9 @@ pi remove git:github.com/baidd1011/pi-jobs
 
 | 命令 | 作用 |
 |---|---|
-| `/job add <prompt> [--budget N] [--timeout MIN] [--max-turns N] [--tools read,edit,...] [--no-network] [--delivery branch\|pr]` | 固定已提交的 HEAD、记录策略、入队并请求启动 worker；默认本地分支交付 |
-| `/job list [--all]` | 查看活动任务或全部历史 |
-| `/job status <id>` | 查看状态、阶段、成本、停止原因、base 和交付信息 |
+| `/job add <prompt> [--budget N] [--timeout MIN] [--max-turns N] [--tools read,edit,...] [--local-tools-only] [--delivery branch\|pr]` | 固定已提交的 HEAD、记录策略、入队并请求启动 worker；默认本地分支交付 |
+| `/job list [--all]` | 查看活动任务或全部历史，并显式列出无法读取的 job 文件 |
+| `/job status <id>` | 查看状态、阶段、成本、停止原因、base、交付信息和确定性下一步 |
 | `/job log <id>` | 查看任务日志 |
 | `/job result <id>` | 查看结果分支、摘要和 review 命令 |
 | `/job cancel <id>` | queued 时立即取消，running 时通知 RPC 进程停止 |
@@ -89,11 +89,13 @@ pi remove git:github.com/baidd1011/pi-jobs
 | `/job audit <id>` | 在 Pi 中展示完整审计报告，并默认写入 `~/.pi/jobs/reports/audits/<id>-r<revision>.md` |
 | `/job cleanup [--dry-run]` | 安全清理终态 heartbeat、cancel marker、合格临时文件和 clean/commit 匹配的 worktree；其余只列出原因和建议命令 |
 | `/job setup` | 幂等注册或更新 `pi-jobs-worker` |
-| `/job doctor` | 检查运行环境、provider key、调度器、锁、stale 任务和 worktree；不再顺手清理终态 heartbeat |
+| `/job doctor` | 只读检查配置、job 文件、队列审计缺口、运行环境、provider key、调度器、锁、stale 任务和 worktree |
 | `/job version` | 显示包版本，并检查计划任务 runner 路径是否过期 |
 | `/job uninstall` | 只删除计划任务，保留全部数据和 Git 产物 |
 
-`/ns` 在一个大版本内保留为弃用兼容别名。`/ns rm` 映射为 cancel，`/ns digest` 映射为新的 digest 命令；每次使用都会显示弃用提示。
+`/ns` 保留为弃用兼容别名。`/ns rm` 映射为 cancel，`/ns digest` 映射为新的 digest 命令；每次使用都会明确提示将在 v2.0.0 删除。
+
+`/job digest --notify` 在 v1.4 仍会发送 Windows Toast，但每次使用都会显示弃用提示；推荐普通 digest 或 `--markdown`，并计划在 v2.0.0 删除。
 
 cleanup 的临时文件扫描仅限数据根目录及 `jobs/control/heartbeats/locks`，不会进入 `worktrees/logs/reports`。真正删除前会重新检查任务状态、文件指纹、worktree cleanliness 和结果 commit；`--dry-run` 会逐项显示 `would-remove`，任何未知参数都会被拒绝。
 
@@ -115,11 +117,13 @@ PR 交付只支持 GitHub Draft PR，并且必须显式安装并登录 GitHub CL
 
 ### 任务策略
 
-默认工具固定为 `read,bash,edit,write`。`--tools` 只接受 `read,bash,edit,write,grep,find,ls`，`--max-turns` 范围为 1–1000。`--no-network` 禁止 agent 工具主动联网，因此不能与 `bash` 同时使用；它不隔离模型 API，也不限制 runner 自己执行已确认的 GitHub 交付。例如：
+默认工具固定为 `read,bash,edit,write`。`--tools` 只接受 `read,bash,edit,write,grep,find,ls`，`--max-turns` 范围为 1–1000。推荐的 `--local-tools-only` 会自动从默认工具中移除 `bash`，并拒绝显式包含 `bash` 的工具列表；它只限制 agent 工具，不是系统级断网，不隔离模型 API，也不限制 runner 自己执行已确认的 GitHub 交付。例如：
 
 ```text
-/job add 只读检查配置 --tools read,grep,find,ls --no-network --max-turns 20
+/job add 只读检查配置 --tools read,grep,find,ls --local-tools-only --max-turns 20
 ```
+
+`--no-network` 在 v1.4 保持相同行为和内部兼容字段，但每次使用都会提示改用 `--local-tools-only`，并计划在 v2.0.0 删除。两个参数同时出现会按重复选项拒绝。
 
 ## 设置
 
@@ -160,7 +164,7 @@ node "<pi-jobs-package-dir>\runner\run.mjs"
 ```text
 config.json              运行默认值和独立的 piPath
 queue-state.json         权威全局暂停状态
-queue-events.jsonl       派生队列审计事件
+queue-events.jsonl       真实 pause/resume 的派生队列审计事件
 jobs/<id>.json           唯一权威任务记录
 events.jsonl             按 jobId + revision 标识的派生审计事件
 control/<id>.cancel.json 取消信号
@@ -176,7 +180,11 @@ runner.lock              PID + 进程启动时间 + token 所有权锁
 
 新任务使用 schema v4：记录请求策略、实际运行策略、队列优先级，以及可选的 PR 配置与确认快照；进入 agent 阶段时一次性持久化 runtime。旧 v1–v3 任务不批量改写，缺失字段显示为 `unknown / not recorded`，绝不根据当前环境伪造历史值。
 
-运行时决策不会读取 `events.jsonl`。任务记录先写入，审计事件随后追加；启动时会补写缺失 revision 的事件。heartbeat 每 30 秒单独写入，超过 5 分钟视为 stale。`/job doctor` 只报告终态 heartbeat 数量并提示运行 `/job cleanup`，不再顺手删除。
+运行时决策不会读取 `events.jsonl`。任务记录先写入，任务审计事件随后追加；启动时仍会按 job revision 补齐任务事件。`queue-state.json` 是队列暂停状态的唯一权威，`queue-events.jsonl` 只追加真实 pause/resume；缺失 revision 只由 doctor 报告，绝不伪造无法证明的 from/to 历史。heartbeat 每 30 秒单独写入，超过 5 分钟视为 stale。
+
+`config.json` 采用失败关闭：损坏、非法或无法读取时，worker 会在认领任何任务前退出，不回退默认值，也不覆盖原文件；`/job doctor` 会只读报告路径、错误类型和人工修复建议。无法解析、文件名/ID 不匹配或缺少关键字段的 job JSON 同样不会被删除或改名；worker 跳过它们并继续处理健康任务，`/job list` 和 doctor 会列出具体路径。
+
+外部 Pi、Git、GitHub CLI 和调度器错误在进入 UI、权威 job 错误、日志与报告前统一脱敏 URL userinfo、Authorization header 和常见 GitHub token。prompt、summary 与正常代码内容不做泛化替换。`delivery-failed`、`cleanup-needed` 和 `worker-error` 的 status、result、digest 与 audit 会给出确定性的 review、dry-run 或日志检查提示。
 
 ## 停止与恢复
 

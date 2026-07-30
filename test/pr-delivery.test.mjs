@@ -27,7 +27,7 @@ function fakeExecutor(options = {}) {
     }
     if (command === "git" && args.includes("rev-parse")) return resultSha;
     if (command === "git" && args.includes("push")) {
-      if (options.failPush) throw new Error("simulated push failure");
+      if (options.failPush) throw new Error(options.failureMessage || "simulated push failure");
       const spec = args.at(-1);
       const branch = spec.split(":").at(-1).replace("refs/heads/", "");
       state.remoteBranches.set(branch, resultSha);
@@ -41,7 +41,7 @@ function fakeExecutor(options = {}) {
     }
     if (command === "gh" && args[0] === "pr" && args[1] === "list") return JSON.stringify(state.pull ? [state.pull] : []);
     if (command === "gh" && args[0] === "pr" && args[1] === "create") {
-      if (options.failPrCreate) throw new Error("simulated PR failure");
+      if (options.failPrCreate) throw new Error(options.failureMessage || "simulated PR failure");
       const bodyPath = args[args.indexOf("--body-file") + 1];
       state.body = readFileSync(bodyPath, "utf8");
       state.pull = { number: 7, url: "https://github.com/example/project/pull/7", state: "OPEN", isDraft: true, headRefName: args[args.indexOf("--head") + 1], baseRefName: "main" };
@@ -137,4 +137,11 @@ test("delivery rechecks account, permission, remote identity, push, and PR creat
   const prFailed = fakeExecutor({ failPrCreate: true });
   assert.throws(() => pr.deliverPullRequest(job, { execute: prFailed.execute }), /Draft PR creation failed/);
   assert.equal(prFailed.state.remoteBranches.get(branch), resultSha, "successful push is retained when PR creation fails");
+
+  const secret = `github_pat_${"S".repeat(30)}`;
+  const redacted = fakeExecutor({ failPush: true, failureMessage: `Authorization: Bearer ${secret} https://alice:secret@github.com/example/project.git` });
+  assert.throws(
+    () => pr.deliverPullRequest(job, { execute: redacted.execute }),
+    (error) => !/github_pat_|alice:secret|Bearer\s+github_pat_/.test(error.message) && /\[REDACTED\]/.test(error.message),
+  );
 });

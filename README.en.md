@@ -13,7 +13,7 @@ The queue remains strictly sequential. It does not wake a sleeping computer, ret
 Install a pinned release tag:
 
 ```powershell
-pi install git:github.com/baidd1011/pi-jobs@v1.3.0
+pi install git:github.com/baidd1011/pi-jobs@v1.4.0
 ```
 
 If `extension/nightshift.ts` or `extension/jobs.ts` was previously registered manually, disable that old entry in `pi config` first to avoid duplicate command registration.
@@ -75,9 +75,9 @@ The worker rescans an empty queue once per second and exits only after five cons
 
 | Command | Effect |
 |---|---|
-| `/job add <prompt> [--budget N] [--timeout MIN] [--max-turns N] [--tools read,edit,...] [--no-network] [--delivery branch\|pr]` | Freeze committed HEAD, record policy, enqueue, and request the worker; local branch is the default |
-| `/job list [--all]` | Show active jobs or all history |
-| `/job status <id>` | Show state, phase, cost, stop detail, base, and delivery |
+| `/job add <prompt> [--budget N] [--timeout MIN] [--max-turns N] [--tools read,edit,...] [--local-tools-only] [--delivery branch\|pr]` | Freeze committed HEAD, record policy, enqueue, and request the worker; local branch is the default |
+| `/job list [--all]` | Show active jobs or all history, plus unreadable job records |
+| `/job status <id>` | Show state, phase, cost, stop detail, base, delivery, and deterministic next action |
 | `/job log <id>` | Show the job log |
 | `/job result <id>` | Show the result branch, summary, and review command |
 | `/job cancel <id>` | Cancel immediately if queued or signal the running RPC process |
@@ -89,11 +89,13 @@ The worker rescans an empty queue once per second and exits only after five cons
 | `/job audit <id>` | Render a full audit in Pi and atomically write `~/.pi/jobs/reports/audits/<id>-r<revision>.md` |
 | `/job cleanup [--dry-run]` | Safely remove terminal heartbeats, cancel markers, qualified temp files, and clean, commit-matching worktrees; everything else is reported with a reason and a suggested command |
 | `/job setup` | Idempotently register/update `pi-jobs-worker` |
-| `/job doctor` | Inspect runtime, provider key presence, scheduler, locks, stale jobs, and worktrees; no longer auto-deletes terminal heartbeats |
+| `/job doctor` | Read-only checks for config, job records, queue-audit gaps, runtime, provider key, scheduler, locks, stale jobs, and worktrees |
 | `/job version` | Show the package version and detect a stale scheduled runner path |
 | `/job uninstall` | Remove only the scheduled task; preserve all data and Git artifacts |
 
-`/ns` remains as a deprecated compatibility alias for one major version. `/ns rm` maps to cancel and `/ns digest` maps to the new digest command; every use displays a deprecation warning.
+`/ns` remains as a deprecated compatibility alias. `/ns rm` maps to cancel and `/ns digest` maps to the new digest command; every use says explicitly that removal is planned for v2.0.0.
+
+`/job digest --notify` still sends a Windows toast in v1.4, but every use is deprecated in favor of a plain digest or `--markdown`; removal is planned for v2.0.0.
 
 Cleanup scans atomic temporary files only in the data root and `jobs/control/heartbeats/locks`; it never descends into `worktrees/logs/reports`. Before deletion it revalidates job state, file identity, worktree cleanliness, and the recorded result commit. `--dry-run` lists every `would-remove` target, and unknown arguments are rejected.
 
@@ -115,11 +117,13 @@ The remote URL, account, push permission, and remote base are checked again befo
 
 ### Task policy
 
-The fixed default tool set is `read,bash,edit,write`. `--tools` accepts only `read,bash,edit,write,grep,find,ls`; `--max-turns` accepts 1–1000. `--no-network` prevents active network use by agent tools and therefore cannot be combined with `bash`. It does not isolate model API traffic or runner-controlled, confirmed GitHub delivery. Example:
+The fixed default tool set is `read,bash,edit,write`. `--tools` accepts only `read,bash,edit,write,grep,find,ls`; `--max-turns` accepts 1–1000. The recommended `--local-tools-only` removes `bash` from the default set and rejects an explicit `bash` allowlist. It limits agent tools only: it is not system-level network isolation and does not isolate model API traffic or runner-controlled, confirmed GitHub delivery. Example:
 
 ```text
-/job add Inspect configuration only --tools read,grep,find,ls --no-network --max-turns 20
+/job add Inspect configuration only --tools read,grep,find,ls --local-tools-only --max-turns 20
 ```
+
+`--no-network` retains the same behavior and historical storage field in v1.4, but warns on every use and is planned for removal in v2.0.0. Combining both names is rejected as a duplicate option.
 
 ## Setup
 
@@ -160,7 +164,7 @@ New state lives under `~/.pi/jobs/`:
 ```text
 config.json              runtime defaults and the independent piPath
 queue-state.json         authoritative global pause state
-queue-events.jsonl       derived queue audit events
+queue-events.jsonl       real pause/resume derived queue events
 jobs/<id>.json           sole authoritative job record
 events.jsonl             derived audit events, keyed by jobId + revision
 control/<id>.cancel.json cancellation signals
@@ -176,7 +180,11 @@ Job states are `queued`, `running`, `done`, `failed`, `overbudget`, `timeout`, a
 
 New jobs use schema v4: requested/effective policy, queue priority, and optional PR configuration and authorization snapshots are recorded. Runtime is captured once when the agent phase begins. Older v1–v3 jobs are not bulk-rewritten; missing fields render as `unknown / not recorded` and are never reconstructed from the current environment.
 
-`events.jsonl` is never consulted to make runtime decisions. Job writes happen first and event appends second; startup derives any missing revision events. Heartbeats are written separately every 30 seconds and are stale after five minutes. `/job doctor` only reports the count of terminal heartbeats and points the user at `/job cleanup`; it no longer removes them on the fly.
+`events.jsonl` is never consulted to make runtime decisions. Job writes happen first and job-event appends second; startup still reconciles job events by job revision. `queue-state.json` is the sole authority for pause state. `queue-events.jsonl` records only real pause/resume operations; missing revisions are reported by doctor and are never filled with invented from/to history. Heartbeats are written separately every 30 seconds and are stale after five minutes.
+
+Configuration is fail-closed. A malformed, invalid, or unreadable `config.json` makes the worker exit before claiming a job, without falling back or overwriting the file; `/job doctor` reports its path, error type, and a manual repair suggestion read-only. Malformed job JSON, filename/ID mismatches, and records missing critical fields are also preserved: the worker skips them and continues with healthy jobs, while list and doctor show their paths.
+
+External Pi, Git, GitHub CLI, and scheduler errors pass through one redaction layer before entering UI errors, authoritative job errors, logs, or reports. URL userinfo, Authorization headers, and common GitHub token formats are masked without broadly rewriting prompts, summaries, or normal code. `delivery-failed`, `cleanup-needed`, and `worker-error` output now includes deterministic review, dry-run, or log/audit guidance.
 
 ## Stops and recovery
 

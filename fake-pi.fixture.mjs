@@ -13,7 +13,7 @@ function handle(message) {
       emit({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "fake task complete" }] } });
       emit({ type: "agent_settled" });
     } else if (mode === "error") {
-      emit({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "fake 401", content: [] } });
+      emit({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: process.env.FAKE_PI_ERROR || "fake 401", content: [] } });
       emit({ type: "agent_settled" });
     } else if (mode === "budget" || mode === "max-turns") {
       emit({ type: "turn_end" });
