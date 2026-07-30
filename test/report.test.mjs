@@ -42,6 +42,9 @@ function makeJob(overrides = {}) {
     provider: overrides.provider ?? "test-provider",
     model: overrides.model ?? "test-model",
     dirtyAtSubmit: overrides.dirtyAtSubmit ?? false,
+    policy: overrides.policy,
+    queuePriority: overrides.queuePriority,
+    deliveryType: overrides.deliveryType,
   });
   const now = new Date().toISOString();
   const finishedAt = overrides.finishedAt ?? now;
@@ -326,4 +329,37 @@ test("digest with no jobs produces an empty result and renders without throwing"
   assert.match(md, /# pi-jobs digest/);
   const path = report.writeDigestReport(digest, { now: new Date("2026-07-29T12:00:00.000Z") });
   assert.ok(existsSync(path));
+});
+
+test("schema v4 audit renders requested/effective policy and Draft PR delivery", () => {
+  const policy = { tools: ["read", "grep", "find"], noNetwork: true, maxTurns: 20 };
+  const { job } = makeJob({
+    schemaVersion: 4,
+    policy,
+    queuePriority: 7,
+    deliveryType: "pr",
+    delivery: {
+      type: "pr", status: "pr-ready", branch: "pi-jobs-policy-audit", commit: "abc1234",
+      prUrl: "https://github.com/example/project/pull/42", prNumber: 42, prState: "OPEN", prDraft: true,
+    },
+    runtime: {
+      provider: "test-provider", model: "test-model", piVersion: "1.2.3", piPath: "pi",
+      capturedAt: new Date().toISOString(), policy,
+    },
+  });
+  const markdown = report.renderAuditMarkdown(report.buildAudit(job.id));
+  assert.match(markdown, /Requested policy.*read,grep,find.*no-network `true`.*max-turns `20`/);
+  assert.match(markdown, /Effective policy.*read,grep,find.*no-network `true`.*max-turns `20`/);
+  assert.match(markdown, /Draft PR https:\/\/github\.com\/example\/project\/pull\/42/);
+});
+
+test("digest reports authoritative global pause state", () => {
+  store.setQueuePaused(true, "report-test", "2026-07-30T00:00:00.000Z");
+  try {
+    const digest = report.buildDigest({ jobs: [], now: new Date("2026-07-30T01:00:00.000Z") });
+    assert.equal(digest.queue.paused, true);
+    assert.match(report.renderDigestMarkdown(digest), /Queue is \*\*PAUSED\*\*/);
+  } finally {
+    store.setQueuePaused(false, "report-test", "2026-07-30T01:01:00.000Z");
+  }
 });

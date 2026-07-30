@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseCleanupArgs, parseDigestArgs } from "../lib/command-args.mjs";
+import { parseAddArgs, parseCleanupArgs, parseDigestArgs, parseJobIdArg, parseNoArgs, parseSetupPrArgs } from "../lib/command-args.mjs";
 import { captureRuntime } from "../lib/runtime.mjs";
 
 test("digest arguments are strict and accept only documented flags", () => {
@@ -36,4 +36,37 @@ test("runtime provider and model resolve job then config then Pi defaults", () =
   );
   assert.equal(fromJob.provider, "job-provider");
   assert.equal(fromJob.model, "job-model");
+});
+
+test("add arguments parse policies and preserve prompt after the option terminator", () => {
+  const defaults = { budgetUsd: 2, timeoutMin: 30, maxTurns: 200, tools: ["read", "bash", "edit", "write"] };
+  assert.deepEqual(parseAddArgs("fix tests --budget 1.5 --timeout 4 --max-turns 20 --tools read,edit,bash --delivery pr", defaults), {
+    prompt: "fix tests", budgetUsd: 1.5, timeoutMin: 4, maxTurns: 20,
+    tools: ["read", "edit", "bash"], noNetwork: false, delivery: "pr",
+  });
+  const offline = parseAddArgs("--no-network audit files", defaults);
+  assert.equal(offline.noNetwork, true);
+  assert.deepEqual(offline.tools, ["read", "edit", "write"]);
+  assert.equal(parseAddArgs("--delivery branch -- explain --tools literally", defaults).prompt, "explain --tools literally");
+});
+
+test("add arguments reject unsafe or ambiguous policies", () => {
+  const defaults = { budgetUsd: 2, timeoutMin: 30, maxTurns: 200 };
+  for (const invalid of [
+    "task --max-turns 0", "task --max-turns 1001", "task --max-turns 1.5",
+    "task --tools read,unknown", "task --tools read,bash --no-network",
+    "task --delivery issue", "task --budget 1 --budget 2", "task --unknown x", "--tools read",
+  ]) assert.throws(() => parseAddArgs(invalid, defaults), /usage: \/job add/);
+});
+
+test("setup-pr and queue command arguments are strict", () => {
+  assert.deepEqual(parseSetupPrArgs("--remote origin --base main"), { remote: "origin", base: "main" });
+  assert.deepEqual(parseSetupPrArgs("--remote upstream"), { remote: "upstream", base: null });
+  for (const invalid of ["", "origin", "--remote", "--remote origin extra", "--remote origin --remote fork"]) {
+    assert.throws(() => parseSetupPrArgs(invalid), /usage: \/job setup-pr/);
+  }
+  assert.doesNotThrow(() => parseNoArgs("", "usage"));
+  assert.throws(() => parseNoArgs("typo", "usage: /job pause"), /usage: \/job pause/);
+  assert.equal(parseJobIdArg("job-1", "usage"), "job-1");
+  assert.throws(() => parseJobIdArg("job-1 extra", "usage: /job prioritize <id>"), /usage: \/job prioritize/);
 });

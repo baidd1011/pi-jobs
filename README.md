@@ -4,16 +4,16 @@
 
 [![CI](https://github.com/baidd1011/pi-jobs/actions/workflows/ci.yml/badge.svg)](https://github.com/baidd1011/pi-jobs/actions/workflows/ci.yml)
 
-`pi-jobs` 是为 Pi coding agent 提供的 Windows 优先、可审计后台任务队列。你可以在 Pi 会话中提交任务后离开终端，worker 会在隔离的 Git worktree 中继续执行，并以本地结果分支交付，同时持久记录状态、成本、日志和追加式审计事件。
+`pi-jobs` 是为 Pi coding agent 提供的 Windows 优先、可审计后台任务队列。你可以在 Pi 会话中提交任务后离开终端，worker 会在隔离的 Git worktree 中继续执行，并默认以本地结果分支交付；显式配置后也可创建 GitHub Draft PR。状态、成本、日志、执行策略和追加式审计事件都会持久记录。
 
-首个版本刻意保持串行和本地化：不创建或推送 PR、不并行执行任务、不唤醒睡眠中的计算机、不自动重试模型调用，也不支持 Windows 以外的调度器。
+队列仍严格串行，不唤醒睡眠中的计算机、不自动重试模型调用，也不支持 Windows 以外的调度器。PR 交付是可选能力，默认不会安装、调用或要求登录 `gh`。
 
 ## 安装
 
 从固定版本标签安装：
 
 ```powershell
-pi install git:github.com/baidd1011/pi-jobs@v1.2.0
+pi install git:github.com/baidd1011/pi-jobs@v1.3.0
 ```
 
 如果此前手动注册过 `extension/nightshift.ts` 或 `extension/jobs.ts`，请先在 `pi config` 中禁用旧入口，避免命令重复注册。
@@ -65,9 +65,9 @@ pi remove git:github.com/baidd1011/pi-jobs
 
 1. `/job add` 固定当前仓库已提交的 `HEAD`，并原子写入 queued 任务。主工作区可以是 dirty，但未提交修改绝不会复制进任务。
 2. 命令写入 wake 请求，并调用 `Start-ScheduledTask pi-jobs-worker`。
-3. 单个 worker 按创建顺序认领任务。每个任务在 `~/.pi/jobs/worktrees/<id>` 下运行，并使用 `pi-jobs-<id>` 分支；用户的主工作树不会被 checkout 或 reset。
-4. worker 记录成本、token、日志和状态转换，并单独每 30 秒写一次 heartbeat。无论成功、失败、取消、超预算或超时，都会尝试提交已有成果。
-5. 有变更的分支保留为 `branch-ready`；无变更的分支会被删除并记录为 `no-changes`；若 Windows 无法释放 worktree，则保留现场并记录为 `failed / cleanup-needed`。
+3. 单个 worker 按 `queuePriority DESC, createdAt ASC, id ASC` 认领任务。每个任务在 `~/.pi/jobs/worktrees/<id>` 下运行，并使用 `pi-jobs-<id>` 分支；用户的主工作树不会被 checkout 或 reset。
+4. worker 将归一化后的工具、离线和 max-turns 策略显式传给 Pi，同时记录成本、token、日志、实际策略和状态转换；heartbeat 每 30 秒单独写入。
+5. 有变更的分支保留为 `branch-ready`；无变更的分支会被删除并记录为 `no-changes`。只有成功且有提交的 PR 任务才会非强制 push 并创建 Draft PR；任何外部交付失败都保留本地分支。
 
 队列为空时，worker 每秒重扫一次，连续 5 次为空才退出。计划任务使用 `MultipleInstancesPolicy=Queue`，关闭 add 与退出之间的竞态。同一计划任务还有一个每 15 分钟触发的 watchdog。
 
@@ -75,13 +75,16 @@ pi remove git:github.com/baidd1011/pi-jobs
 
 | 命令 | 作用 |
 |---|---|
-| `/job add <prompt> [--budget N] [--timeout MIN]` | 固定已提交的 HEAD、入队并请求启动 worker |
+| `/job add <prompt> [--budget N] [--timeout MIN] [--max-turns N] [--tools read,edit,...] [--no-network] [--delivery branch\|pr]` | 固定已提交的 HEAD、记录策略、入队并请求启动 worker；默认本地分支交付 |
 | `/job list [--all]` | 查看活动任务或全部历史 |
 | `/job status <id>` | 查看状态、阶段、成本、停止原因、base 和交付信息 |
 | `/job log <id>` | 查看任务日志 |
 | `/job result <id>` | 查看结果分支、摘要和 review 命令 |
 | `/job cancel <id>` | queued 时立即取消，running 时通知 RPC 进程停止 |
 | `/job retry <id>` | 创建新任务，并重新固定仓库当前已提交的 HEAD |
+| `/job setup-pr --remote <name> [--base <branch>]` | 为当前仓库验证并保存 GitHub PR 交付配置 |
+| `/job pause` / `/job resume` | 软暂停后续认领，或解除暂停并唤醒 worker；当前任务会继续完成 |
+| `/job prioritize <id>` | 将一个 queued 任务移到队首，并写入任务审计事件 |
 | `/job digest [--hours N] [--markdown] [--notify]` | 汇总最近 N 小时（默认 24h）完成的任务，附 review 命令；额外列出全部尚未解决的 cleanup-needed；可写 Markdown 或发 Windows Toast |
 | `/job audit <id>` | 在 Pi 中展示完整审计报告，并默认写入 `~/.pi/jobs/reports/audits/<id>-r<revision>.md` |
 | `/job cleanup [--dry-run]` | 安全清理终态 heartbeat、cancel marker、合格临时文件和 clean/commit 匹配的 worktree；其余只列出原因和建议命令 |
@@ -94,11 +97,36 @@ pi remove git:github.com/baidd1011/pi-jobs
 
 cleanup 的临时文件扫描仅限数据根目录及 `jobs/control/heartbeats/locks`，不会进入 `worktrees/logs/reports`。真正删除前会重新检查任务状态、文件指纹、worktree cleanliness 和结果 commit；`--dry-run` 会逐项显示 `would-remove`，任何未知参数都会被拒绝。
 
+### PR 交付
+
+PR 交付只支持 GitHub Draft PR，并且必须显式安装并登录 GitHub CLI。先在目标仓库内配置：
+
+```text
+/job setup-pr --remote origin --base main
+```
+
+配置会按规范化仓库路径保存 remote、脱敏 URL、GitHub host、`owner/repo`、base、`gh` 绝对路径和确认账号。随后每个 PR 任务仍需单独确认：
+
+```text
+/job add 修复登录错误并补测试 --delivery pr
+```
+
+提交和 push 前都会复查 remote URL、账号、push 权限及远端 base。提交时本地 committed HEAD 必须与远端 base HEAD 完全一致；结果分支使用非强制 push。失败、取消、超预算、超时、无变更或外部交付失败都不会丢失本地成果，也不会发布部分成果。配置和任务记录绝不保存 token。
+
+### 任务策略
+
+默认工具固定为 `read,bash,edit,write`。`--tools` 只接受 `read,bash,edit,write,grep,find,ls`，`--max-turns` 范围为 1–1000。`--no-network` 禁止 agent 工具主动联网，因此不能与 `bash` 同时使用；它不隔离模型 API，也不限制 runner 自己执行已确认的 GitHub 交付。例如：
+
+```text
+/job add 只读检查配置 --tools read,grep,find,ls --no-network --max-turns 20
+```
+
 ## 设置
 
 要求：
 
 - Windows、Node.js 22.19.0 或更高版本、支持 worktree 的 Git，以及 Pi。
+- 仅使用 `--delivery pr` 时需要 GitHub CLI (`gh`) 和可 push 的 GitHub 仓库权限。
 - provider API key 必须保存为 **Windows 用户级环境变量**；计划任务无法继承只在 `.bashrc` 中 export 的 key。
 - 计算机必须保持唤醒，用户会话必须保持登录；锁屏不影响运行。
 
@@ -131,6 +159,8 @@ node "<pi-jobs-package-dir>\runner\run.mjs"
 
 ```text
 config.json              运行默认值和独立的 piPath
+queue-state.json         权威全局暂停状态
+queue-events.jsonl       派生队列审计事件
 jobs/<id>.json           唯一权威任务记录
 events.jsonl             按 jobId + revision 标识的派生审计事件
 control/<id>.cancel.json 取消信号
@@ -142,9 +172,9 @@ reports/audits/          /job audit 写出的 Markdown 报告
 runner.lock              PID + 进程启动时间 + token 所有权锁
 ```
 
-任务状态包括 `queued`、`running`、`done`、`failed`、`overbudget`、`timeout` 和 `canceled`。运行阶段包括 `preparing`、`agent` 和 `finalizing`。交付始终是本地分支，状态为 `not-started`、`pending`、`branch-ready`、`no-changes` 或 `failed`。
+任务状态包括 `queued`、`running`、`done`、`failed`、`overbudget`、`timeout` 和 `canceled`。运行阶段包括 `preparing`、`agent`、`finalizing` 和 `delivering`。交付类型为 `branch` 或 `pr`；状态还包括 `push-pending`、`pushed` 和 `pr-ready`。
 
-新任务使用 schema v3：进入 agent 阶段时会一次性持久化 `runtime: { provider, model, piVersion, piPath, capturedAt }`，后续不会改写。旧 v1/v2 任务保持只读，缺失字段在 audit 中显示为 `unknown / not recorded`，绝不根据当前环境伪造历史值。
+新任务使用 schema v4：记录请求策略、实际运行策略、队列优先级，以及可选的 PR 配置与确认快照；进入 agent 阶段时一次性持久化 runtime。旧 v1–v3 任务不批量改写，缺失字段显示为 `unknown / not recorded`，绝不根据当前环境伪造历史值。
 
 运行时决策不会读取 `events.jsonl`。任务记录先写入，审计事件随后追加；启动时会补写缺失 revision 的事件。heartbeat 每 30 秒单独写入，超过 5 分钟视为 stale。`/job doctor` 只报告终态 heartbeat 数量并提示运行 `/job cleanup`，不再顺手删除。
 
