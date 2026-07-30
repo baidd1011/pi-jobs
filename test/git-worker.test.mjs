@@ -33,6 +33,19 @@ function add(repo, prompt) {
   return store.createJob({ ...frozen, prompt, budgetUsd: 1, timeoutMin: 1, maxTurns: 10 });
 }
 
+function addPr(repo, prompt) {
+  const frozen = gitops.inspectRepo(repo);
+  return store.createJob({
+    ...frozen, prompt, budgetUsd: 1, timeoutMin: 1, maxTurns: 10,
+    policy: { tools: ["read", "edit", "write"], noNetwork: true, maxTurns: 10 },
+    delivery: {
+      type: "pr", status: "not-started", branch: null, commit: null,
+      target: { remoteName: "origin", remoteUrl: "https://github.com/example/project.git", host: "github.com", repository: "example/project", baseBranch: "main", ghPath: "gh" },
+      authorization: { confirmedBy: "alice", confirmedAt: "2026-07-30T00:00:00.000Z" },
+    },
+  });
+}
+
 const configFor = (name) => ({ worktreeRoot: join(suiteRoot, name), heartbeatMs: 10, maxTurns: 10 });
 const success = async (job) => {
   writeFileSync(join(job.worktreePath, "result.txt"), "job output\n");
@@ -163,4 +176,94 @@ test("runOne captures the runtime field once when entering the agent phase", asy
   assert.equal(persisted.runtime.piPath, process.execPath);
   assert.ok(persisted.runtime.capturedAt, "capturedAt is set");
   assert.equal(terminal.runtime.provider, "test-provider");
+  assert.deepEqual(persisted.runtime.policy, { tools: ["read", "bash", "edit", "write"], noNetwork: false, maxTurns: 10 });
+});
+
+test("successful PR delivery records a Draft PR after preserving the local branch", async () => {
+  const repo = makeRepo("pr-success-repo");
+  const created = addPr(repo, "deliver a PR");
+  const claimed = store.claimNextJob("worker-pr-success");
+  let calls = 0;
+  const delivery = (job, options) => {
+    calls++;
+    assert.equal(job.phase, "delivering");
+    options.onPushed({ remoteBranch: job.branch, remoteCommit: git(repo, "rev-parse", job.branch), pushedAt: new Date().toISOString() });
+    return { prUrl: "https://github.com/example/project/pull/9", prNumber: 9, prState: "OPEN", prDraft: true, deliveredAt: new Date().toISOString() };
+  };
+  const terminal = await runner.runOne(claimed, configFor("worktrees-pr-success"), success, delivery);
+  assert.equal(calls, 1);
+  assert.equal(terminal.state, "done");
+  assert.equal(terminal.delivery.status, "pr-ready");
+  assert.equal(terminal.delivery.prUrl, "https://github.com/example/project/pull/9");
+  assert.equal(git(repo, "show", `${terminal.delivery.branch}:result.txt`), "job output");
+  assert.equal(existsSync(join(configFor("worktrees-pr-success").worktreeRoot, created.id)), false);
+});
+
+test("PR delivery failure and unsuccessful agent runs preserve the local result branch", async () => {
+  const failedRepo = makeRepo("pr-delivery-failed-repo");
+  const failedCreated = addPr(failedRepo, "delivery fails");
+  const failedTerminal = await runner.runOne(
+    store.claimNextJob("worker-pr-delivery-failed"), configFor("worktrees-pr-delivery-failed"), success,
+    () => { throw new Error("simulated push failure"); },
+  );
+  assert.equal(failedTerminal.state, "failed");
+  assert.equal(failedTerminal.statusDetail, "delivery-failed");
+  assert.equal(failedTerminal.delivery.type, "pr");
+  assert.equal(failedTerminal.delivery.status, "failed");
+  assert.equal(git(failedRepo, "show", `${failedTerminal.delivery.branch}:result.txt`), "job output");
+  assert.equal(existsSync(join(configFor("worktrees-pr-delivery-failed").worktreeRoot, failedCreated.id)), false);
+
+  const partialRepo = makeRepo("pr-partial-repo");
+  addPr(partialRepo, "agent fails with partial output");
+  let deliveryCalls = 0;
+  const partialTerminal = await runner.runOne(
+    store.claimNextJob("worker-pr-partial"), configFor("worktrees-pr-partial"),
+    async (job) => { writeFileSync(join(job.worktreePath, "partial.txt"), "partial\n"); return { status: "failed", cost: 0.01, summary: "partial", error: "model failed" }; },
+    () => { deliveryCalls++; },
+  );
+  assert.equal(deliveryCalls, 0);
+  assert.equal(partialTerminal.state, "failed");
+  assert.equal(partialTerminal.delivery.type, "pr");
+  assert.equal(partialTerminal.delivery.status, "branch-ready");
+  assert.equal(partialTerminal.delivery.fallbackReason, "task-not-successful");
+  assert.equal(git(partialRepo, "show", `${partialTerminal.delivery.branch}:partial.txt`), "partial");
+});
+
+test("no-change PR job does not call delivery and stale delivering recovery does not call the model", async () => {
+  const noChangeRepo = makeRepo("pr-no-change-repo");
+  addPr(noChangeRepo, "no change");
+  let deliveryCalls = 0;
+  const noChange = await runner.runOne(
+    store.claimNextJob("worker-pr-no-change"), configFor("worktrees-pr-no-change"),
+    async () => ({ status: "done", cost: 0, summary: "none", error: null }),
+    () => { deliveryCalls++; },
+  );
+  assert.equal(noChange.state, "done");
+  assert.equal(noChange.delivery.type, "pr");
+  assert.equal(noChange.delivery.status, "no-changes");
+  assert.equal(deliveryCalls, 0);
+
+  const recoveryRepo = makeRepo("pr-delivery-recovery-repo");
+  const created = addPr(recoveryRepo, "recover delivery");
+  let running = store.claimNextJob("dead-delivery-worker");
+  const cfg = configFor("worktrees-pr-delivery-recovery");
+  running = store.updateJobMetadata(created.id, { branch: gitops.jobBranch(created.id), worktreePath: gitops.jobWorktreePath(created.id, cfg) });
+  gitops.createJobWorktree(running, cfg);
+  writeFileSync(join(running.worktreePath, "recover.txt"), "recover\n");
+  const finalized = gitops.finalizeJobWorktree(running, "prepare delivery recovery");
+  running = store.transitionJob(created.id, {
+    phase: "delivering", branch: finalized.branch, filesChanged: finalized.filesChanged,
+    delivery: { status: "push-pending", branch: finalized.branch, commit: finalized.commit },
+  }, "phase:delivering");
+  store.writeHeartbeat(created.id, "dead-delivery-worker", "2020-01-01T00:00:00.000Z");
+  let recoveredCalls = 0;
+  const [recovered] = runner.recoverStaleJobs(cfg, { deliveryRunner: (job, options) => {
+    recoveredCalls++;
+    options.onPushed({ remoteBranch: job.branch, remoteCommit: git(recoveryRepo, "rev-parse", job.branch), pushedAt: new Date().toISOString() });
+    return { prUrl: "https://github.com/example/project/pull/10", prNumber: 10, prState: "OPEN", prDraft: true };
+  } });
+  assert.equal(recoveredCalls, 1);
+  assert.equal(recovered.state, "done");
+  assert.equal(recovered.delivery.type, "pr");
+  assert.equal(recovered.delivery.status, "pr-ready");
 });

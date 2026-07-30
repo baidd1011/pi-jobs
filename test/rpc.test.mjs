@@ -10,7 +10,7 @@ const fakePi = join(here, "..", "fake-pi.fixture.mjs");
 const fakePiCmd = join(here, "..", "fake-pi.cmd");
 const cwd = mkdtempSync(join(tmpdir(), "pi-jobs-rpc-"));
 process.env.PI_JOBS_DATA_DIR = join(cwd, "data");
-const { runPiTask, selectStopCandidate } = await import(`../lib/rpc.mjs?rpc=${Date.now()}`);
+const { buildPiInvocation, runPiTask, selectStopCandidate } = await import(`../lib/rpc.mjs?rpc=${Date.now()}`);
 
 const task = (extra = {}) => ({ id: `rpc-${Math.random()}`, prompt: "test", worktreePath: cwd, budgetUsd: 1, timeoutMin: 1, maxTurns: 10, ...extra });
 const config = (mode, extra = {}) => ({
@@ -87,4 +87,15 @@ test("same-millisecond stop ordering is canceled > overbudget > timeout > max-tu
     { cause: "overbudget", requestedAt: at }, { cause: "canceled", requestedAt: at },
   );
   assert.equal(winner.cause, "canceled");
+});
+
+test("Pi invocation explicitly enforces the audited tool policy", () => {
+  const normal = buildPiInvocation(task({ policy: { tools: ["read", "edit"], noNetwork: false, maxTurns: 7 } }), config("done"));
+  assert.deepEqual(normal.policy, { tools: ["read", "edit"], noNetwork: false, maxTurns: 7 });
+  assert.deepEqual(normal.args.slice(0, 5), ["--mode", "rpc", "--no-extensions", "--tools", "read,edit"]);
+  assert.equal(normal.args.includes("--offline"), false);
+  const offline = buildPiInvocation(task({ policy: { tools: ["read", "edit", "write"], noNetwork: true, maxTurns: 5 } }), config("done"));
+  assert.equal(offline.args.includes("--offline"), true);
+  assert.equal(offline.env.PI_OFFLINE, "1");
+  assert.throws(() => buildPiInvocation(task({ policy: { tools: ["read", "bash"], noNetwork: true, maxTurns: 5 } }), config("done")), /cannot enable bash/);
 });

@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file. The project fol
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-30
+
+### Added
+
+- Optional GitHub Draft PR delivery with per-repository `/job setup-pr` configuration, explicit per-job confirmation, non-force push, and idempotent recovery after delivery crashes.
+- Auditable task policies for explicit Pi tool allowlists, `--no-network`, and `--max-turns`; the same normalized policy drives both process arguments and runtime audit records.
+- Global `/job pause` and `/job resume`, plus `/job prioritize <id>` with deterministic priority ordering and queue audit events.
+- Schema v4 fields for requested/effective policy, queue priority, PR authorization snapshots, remote delivery state, and the `delivering` phase.
+- Fake-gh and local-remote coverage for PR setup, authorization changes, push/PR failures, collisions, idempotent recovery, and branch-preserving fallback behavior.
+
+### Changed
+
+- The worker now always passes an explicit tool allowlist to Pi instead of relying on Pi defaults.
+- `doctor` reports PR readiness for the current repository without making configuration changes.
+- List, status, result, digest, and audit output include queue, policy, priority, and PR delivery information where available.
+
+### Security
+
+- PR delivery is opt-in, GitHub-only, requires an explicit remote and fresh confirmation, never force-pushes, and never stores tokens or credential-bearing URLs.
+- `--no-network` rejects `bash` and only constrains agent tools; model API traffic and runner-controlled PR delivery remain outside that policy.
+
 ## [1.2.0] - 2026-07-29
 
 ### Added
@@ -57,7 +78,8 @@ All notable changes to this project are documented in this file. The project fol
 - Budget, timeout, cancellation, crash recovery, heartbeat, migration, and doctor support.
 - Initial 34-test fake-RPC and Git integration suite.
 
-[Unreleased]: https://github.com/baidd1011/pi-jobs/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/baidd1011/pi-jobs/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/baidd1011/pi-jobs/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/baidd1011/pi-jobs/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/baidd1011/pi-jobs/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/baidd1011/pi-jobs/releases/tag/v1.0.0
